@@ -1,17 +1,24 @@
 {
-  "name": "@runnerty/interpreter-core",
-  "version": "3.1.2",
+  "name": "@dvictorjhg/interpreter-core",
+  "version": "4.0.7",
   "description": "Runnerty interpreter module",
   "author": "Runnerty Tech",
   "license": "MIT",
-  "main": "index.js",
+  "main": "index.cjs",
+  "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "lint": "eslint '**/*.js' && prettier --check '**'"
+    "lint": "eslint '**/*.js' && prettier --check '**'",
+    "build": "rollup -c",
+    "prepublishOnly": "npm run build"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/runnerty/interpreter-core.git"
+    "url": "git+https://github.com/dvictorjhg/interpreter-core.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "keywords": [
     "runnerty",
@@ -19,19 +26,20 @@
     "core"
   ],
   "bugs": {
-    "url": "https://github.com/runnerty/interpreter-core/issues"
+    "url": "https://github.com/dvictorjhg/interpreter-core/issues"
   },
-  "homepage": "https://github.com/runnerty/interpreter-core#readme",
+  "homepage": "https://github.com/dvictorjhg/interpreter-core#readme",
   "dependencies": {
     "lodash": "~4.17.21",
-    "moment": "~2.29.4",
-    "object-sizeof": "~2.6.3",
-    "uuid": "~9.0.1"
+    "moment": "~2.30.1",
+    "object-sizeof": "~2.6.5",
+    "uuid": "~10.0.0"
   },
   "devDependencies": {
-    "eslint": "^8.52.0",
-    "eslint-config-prettier": "^9.0.0",
-    "eslint-plugin-prettier": "^5.0.1",
-    "prettier": "^3.0.3"
+    "eslint": "^9.7.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "prettier": "^3.3.3",
+    "rollup": "^4.19.0"
   }
 }

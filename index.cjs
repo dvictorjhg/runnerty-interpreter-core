@@ -1,10 +1,13 @@
-import _uuid from 'uuid';
-import crypto from 'crypto';
-import lodash from 'lodash';
-import moment from 'moment';
-import path from 'path';
+'use strict';
 
-export const functions = {
+var sizeof = require('object-sizeof');
+var _uuid = require('uuid');
+var crypto = require('crypto');
+var lodash = require('lodash');
+var moment = require('moment');
+var path = require('path');
+
+const functions = {
   gv: getvalue,
   getvalue: getvalue,
   gvq: getvaluequoted,
@@ -917,7 +920,7 @@ async function for_of(values, obj) {
 
   const res = [];
   try {
-    const interpreter = (await import('../index.js')).default;
+    const interpreter = (await Promise.resolve().then(function () { return index; })).default;
 
     for (const value of values) {
       const newObj = await interpreter.interpret(obj, value);
@@ -928,3 +931,449 @@ async function for_of(values, obj) {
     throw new Error(`For of exception: ${ex}`);
   }
 }
+
+const functFlag = '@';
+
+async function interpret(input, values = {}) {
+  try {
+    const tokens = lex(input);
+    const parseTree = parse(tokens);
+    const output = await evaluate(parseTree, values);
+    return output;
+  } catch (err) {
+    throw err;
+  }
+}
+
+/**
+ * Lexer
+ * @param input (String)
+ * @returns {Object} (Tokens)
+ */
+function lex(input) {
+  const isOperator = c => {
+    return /[(),]/.test(c);
+  };
+  const isDigit = c => {
+    return /[0-9]/.test(c);
+  };
+  const isString = c => {
+    return /('(?:[^'\\]|(?:\\\\)|(?:\\\\)*\\.{1})*')/gm.test(c);
+  };
+  const isWhiteSpace = c => {
+    return c === ' ';
+  };
+  const isIdentifier = c => {
+    return typeof c === 'string' && !isOperator(c) && !isWhiteSpace(c) && !isString(c);
+  };
+  const isFunction = c => {
+    return typeof c === 'string' && c.startsWith(functFlag) && functions[c.toLowerCase().substring(1)];
+  };
+
+  const tokens = [];
+  let c;
+  let i = 0;
+  const advance = () => {
+    return (c = input[++i]);
+  };
+  const addToken = (type, value) => {
+    tokens.push({
+      type: type,
+      value: value
+    });
+  };
+  while (i < input.length) {
+    c = input[i];
+
+    if (isWhiteSpace(c)) {
+      addToken('string', c);
+      advance();
+    } else if (isOperator(c)) {
+      addToken(c);
+      advance();
+    } else if (isDigit(c)) {
+      let num = c;
+      while (isDigit(advance())) num += c;
+      if (c === '.') {
+        do num += c;
+        while (isDigit(advance()));
+      }
+      addToken('number', num);
+    } else if (c.startsWith("'")) {
+      let str = '';
+      do {
+        str += c;
+        advance();
+      } while (str.startsWith("'") && !isString(str) && typeof c !== 'undefined');
+
+      addToken('string', str);
+    } else if (isIdentifier(c)) {
+      let idn = c;
+      while (isIdentifier(advance()) && c !== functFlag) idn += c;
+      if (isFunction(idn)) {
+        addToken('identifier', idn);
+      } else {
+        addToken('string', idn);
+      }
+    } else throw new Error('Interpretar: Unrecognized token.');
+  }
+  addToken('(end)');
+  return tokens;
+}
+
+/**
+ * Parser
+ * @param tokens (lexer)
+ * @returns {Array}
+ */
+function parse(tokens) {
+  let i = 0;
+  const symbols = {};
+  const symbol = (id, nud, lbp, led) => {
+    const sym = symbols[id] || {};
+    symbols[id] = {
+      lbp: sym.lbp || lbp,
+      nud: sym.nud || nud,
+      led: sym.led || led
+    };
+  };
+
+  const interpretToken = token => {
+    const sym = Object.create(symbols[token.type]);
+    sym.type = token.type;
+    sym.value = token.value;
+    return sym;
+  };
+
+  const token = () => {
+    return interpretToken(tokens[i]);
+  };
+
+  const advance = () => {
+    i++;
+    return token();
+  };
+
+  const isOperator = c => {
+    return /[(),]/.test(c);
+  };
+
+  const expression = rbp => {
+    let left;
+    let t = token();
+    const initType = t.type;
+    advance();
+    if (!isOperator(initType)) {
+      if (!t.nud) throw new Error('Unexpected token: ' + t.type);
+      left = t.nud(t);
+      while (rbp < token().lbp) {
+        t = token();
+        advance();
+        if (!t.led) throw new Error('Unexpected token: ' + t.type);
+        left = t.led(left);
+      }
+
+      return left;
+    } else {
+      return { type: 'string', value: initType };
+    }
+  };
+
+  symbol(',');
+  symbol(')');
+  symbol('(end)');
+
+  symbol('number', number => {
+    return number;
+  });
+  symbol('string', string => {
+    return string;
+  });
+  symbol('identifier', name => {
+    if (token().type === '(') {
+      const args = [];
+      if (tokens[i + 1].type === ')') advance();
+      else {
+        do {
+          //Ignore whitespaces (start param):
+          do {
+            advance();
+          } while (token().value === ' ');
+
+          args.push(expression(2));
+
+          //Ignore whitespace (end param):
+          while (token().value === ' ') {
+            advance();
+          }
+        } while (token().type === ',');
+        if (token().type !== ')') throw new Error("Expected closing parenthesis ')': " + token().value);
+      }
+      advance();
+      return {
+        type: 'call',
+        args: args,
+        name: name.value.toLowerCase()
+      };
+    }
+    return name;
+  });
+
+  symbol('(', () => {
+    const value = expression(2);
+    if (token().type !== ')') throw new Error("Expected closing parenthesis ')'");
+    advance();
+    return value;
+  });
+
+  const parseTree = [];
+  while (token().type !== '(end)') {
+    parseTree.push(expression(0));
+  }
+  return parseTree;
+}
+
+/**
+ * Evaluator
+ * @param parseTree
+ * @param values
+ * @returns {Promise<string>}
+ */
+async function evaluate(parseTree, values) {
+  const variables = {
+    pi: Math.PI,
+    e: Math.E
+  };
+
+  let args = {};
+
+  const parseNode = async node => {
+    if (node.type === 'number') return node.value;
+    if (node.type === 'string') return node.value;
+    else if (node.type === 'identifier') {
+      const value = args.hasOwnProperty(node.value) ? args[node.value] : variables[node.value];
+      if (typeof value === 'undefined') throw new Error(node.value + ' is undefined');
+      return value;
+    } else if (node.type === 'assign') {
+      variables[node.name] = await parseNode(node.value);
+    } else if (node.type === 'call') {
+      for (let i = 0; i < node.args.length; i++) {
+        node.args[i] = await parseNode(node.args[i]);
+        if (typeof node.args[i] === 'string') {
+          node.args[i] = node.args[i].replace(/^'(.*)'$/, '$1');
+        }
+      }
+
+      // GETVALUE / GETVALUEESCAPE / GETVALUEUNESCAPE:
+      const _name = node.name.toLowerCase().substring(1);
+      if (['gvescape', 'getvalueescape', 'gvunescape', 'getvalueunescape'].indexOf(_name) !== -1) {
+        node.args[1] = values;
+      } else if (['gv', 'getvalue', 'gvq', 'getvaluequoted'].indexOf(_name) !== -1) {
+        node.args[2] = values;
+      }
+
+      return await functions[node.name.toLowerCase().substring(1)].apply(null, node.args);
+    } else if (node.type === 'function') {
+      functions[node.name.toLowerCase().substring(1)] = async () => {
+        for (let i = 0; i < node.args.length; i++) {
+          args[node.args[i].value] = arguments[i];
+        }
+        const ret = await parseNode(node.value);
+        args = {};
+        return ret;
+      };
+    }
+  };
+
+  let output = '';
+  for (const node of parseTree) {
+    const value = await parseNode(node);
+    if (typeof value !== 'undefined') {
+      if (typeof value === 'string') output += value;
+      else output = value;
+    }
+  }
+  return output;
+}
+
+// Recursive Object Interpreter:
+class interpreter {
+  static globalValues = {};
+
+  static async interpret(inputObject, objParams, options, globalValues) {
+    let params;
+    if (options?.maxSize && sizeof(inputObject) > options.maxSize) {
+      return inputObject;
+    }
+
+    if (objParams && Object.keys(objParams).length !== 0) {
+      if (!objParams.objParamsIsReplaced) {
+        objParams.objParamsReplaced = await this.interpret(objParams, {}, options, globalValues);
+        objParams.objParamsIsReplaced = true;
+        params = objParams.objParamsReplaced;
+      } else {
+        params = objParams.objParamsReplaced;
+      }
+    }
+
+    if (!options?.ignoreGlobalValues) {
+      if (globalValues) {
+        Object.assign(this.globalValues, globalValues);
+        params = await this._addGlobalValuesToObjParams(params, this.globalValues);
+      } else if (this.globalValues) {
+        params = await this._addGlobalValuesToObjParams(params, this.globalValues);
+      }
+    }
+
+    if (typeof inputObject === 'string') {
+      const res = await this._interpretSecure(objParams, inputObject, params, options);
+      return res;
+    } else if (inputObject instanceof Array) {
+      const promArr = [];
+      for (const item of inputObject) {
+        promArr.push(await this.interpret(item, objParams, options, globalValues));
+      }
+      return await Promise.all(promArr);
+    } else if (inputObject instanceof Object) {
+      const keys = Object.keys(inputObject);
+      const resObject = {};
+
+      for (const key of keys) {
+        const _value = await this.interpret(inputObject[key], objParams, options, globalValues);
+        const _key = await this._interpretSecure(objParams, key, params, options);
+        resObject[_key] = _value;
+      }
+      return resObject;
+    } else {
+      return inputObject;
+    }
+  }
+
+  static async _addGlobalValuesToObjParams(objParams, globalValues) {
+    const rw_options = {
+      ignoreGlobalValues: true
+    };
+    const gvs = globalValues;
+    let res = {};
+
+    if (Array.isArray(gvs)) {
+      for (const gv of gvs) {
+        const keymaster = Object.keys(gv)[0];
+        const valueObjects = gv[keymaster];
+        const keysValueObjects = Object.keys(valueObjects);
+
+        for (const valueKey of keysValueObjects) {
+          const intialValue = gv[keymaster][valueKey];
+
+          if (intialValue instanceof Object) {
+            if (intialValue.format === 'text') {
+              if (intialValue.value instanceof Array) {
+                let i = intialValue.value.length;
+                let finalValue = '';
+
+                for (const initValue of intialValue.value) {
+                  i--;
+                  const rtext = initValue;
+
+                  const quotechar = intialValue.quotechar || '';
+                  const delimiter = intialValue.delimiter || '';
+
+                  if (i !== 0) {
+                    finalValue = finalValue + quotechar + rtext + quotechar + delimiter;
+                  } else {
+                    finalValue = finalValue + quotechar + rtext + quotechar;
+                  }
+                }
+
+                res[keymaster + '_' + valueKey] = finalValue;
+              } else {
+                const value = intialValue.value;
+                res[keymaster + '_' + valueKey] = value;
+              }
+            } else if (intialValue.format === 'json') {
+              res[keymaster + '_' + valueKey] = await this._interpretSecure(
+                objParams,
+                JSON.stringify(intialValue.value),
+                objParams,
+                rw_options
+              );
+            } else if (!intialValue.format) {
+              res[keymaster + '_' + valueKey] = intialValue;
+            }
+          } else {
+            res[keymaster + '_' + valueKey] = intialValue;
+          }
+        }
+      }
+    } else if (gvs instanceof Object) {
+      const keysValueObjects = Object.keys(gvs);
+      for (const valueKey of keysValueObjects) {
+        const intialValue = gvs[valueKey];
+
+        if (intialValue instanceof Object) {
+          if (intialValue.format === 'text') {
+            if (intialValue.value instanceof Array) {
+              let i = intialValue.value.length;
+              let finalValue = '';
+
+              for (const initValue of intialValue.value) {
+                i--;
+                const rtext = initValue;
+
+                const quotechar = intialValue.quotechar || '';
+                const delimiter = intialValue.delimiter || '';
+
+                if (i !== 0) {
+                  finalValue = finalValue + quotechar + rtext + quotechar + delimiter;
+                } else {
+                  finalValue = finalValue + quotechar + rtext + quotechar;
+                }
+              }
+
+              res[valueKey] = finalValue;
+            } else {
+              const value = intialValue.value;
+              res[valueKey] = value;
+            }
+          } else if (intialValue.format === 'json') {
+            res[valueKey] = await this._interpretSecure(
+              objParams,
+              JSON.stringify(intialValue.value),
+              objParams,
+              rw_options
+            );
+          } else if (!intialValue.format) {
+            res[valueKey] = intialValue;
+          }
+        } else {
+          res[valueKey] = intialValue;
+        }
+      }
+    }
+
+    Object.assign(res, objParams);
+    return res;
+  }
+
+  static async _interpretSecure(objParams, inputObject, params, options) {
+    try {
+      const interpret_res = await interpret(inputObject, params);
+      return interpret_res;
+    } catch (err) {
+      let msg = '';
+      if (objParams?.CHAIN_ID) {
+        msg = 'CHAIN: ' + objParams.CHAIN_ID;
+      } else if ('' + objParams?.PROCESS_ID) {
+        msg = ' PROCESS: ' + objParams?.PROCESS_ID;
+      }
+      throw new Error(`Interpreter: ${msg}: ${err} IN: ${inputObject}`);
+    }
+  }
+}
+
+var index = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  default: interpreter
+});
+
+module.exports = interpreter;
