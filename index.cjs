@@ -116,7 +116,7 @@ function getvalue(idvalue, quote, values) {
   let res = '';
   if (values.hasOwnProperty(idvalue)) {
     const match = values[idvalue];
-    if (match || match === 0 || match === false) res = match;
+    if (match != null) res = match;
   } else if (idvalue.startsWith('ENV_')) {
     res = getENVs(idvalue);
   }
@@ -1183,8 +1183,10 @@ async function evaluate(parseTree, values) {
   let args = {};
 
   const parseNode = async node => {
-    if (node.type === 'number' || node.type === 'string' || node.type === 'whitespace') {
+    if (node.type === 'string' || node.type === 'whitespace') {
       return node.value;
+    } else if (node.type === 'number') {
+      return Number(node.value);
     } else if (node.type === 'template') {
       return node.value.replace(/^<>(.*)<\/>$/, '$1');
     } else if (node.type === 'identifier') {
@@ -1209,6 +1211,7 @@ async function evaluate(parseTree, values) {
         node.args[2] = values;
       }
 
+      console.log('evaluate', { name: node.name, value: node.value, args: node.args });
       return await functions[node.name.toLowerCase().substring(1)].apply(null, node.args);
     } else if (node.type === 'function') {
       functions[node.name.toLowerCase().substring(1)] = async () => {
@@ -1227,13 +1230,15 @@ async function evaluate(parseTree, values) {
   for (const node of parseTree) {
     const value = await parseNode(node);
 
-    if (value !== undefined) {
+    if (value != null) {
       if (typeof value === 'string') {
         output = (output || '') + value;
       } else {
-        output = output === undefined ? value : output + value;
+        output = output == null ? value : output + value;
       }
     }
+
+    console.log({ node, value, output });
   }
 
   return output;
@@ -1244,12 +1249,13 @@ class interpreter {
   static globalValues = {};
 
   static async interpret(inputObject, objParams, options, globalValues) {
+    console.log('interpreter.interpret-1', {inputObject, options, objParams: JSON.stringify(objParams, null, 2), globalValues: JSON.stringify(globalValues, null, 2)});
     let params = {};
     if (options?.maxSize && sizeof(inputObject) > options.maxSize) {
       return inputObject;
     }
 
-    if (objParams && Object.keys(objParams).length !== 0) {
+    if (objParams && typeof objParams === 'object' && Object.keys(objParams).length !== 0) {
       if (!objParams.objParamsIsReplaced) {
         objParams.objParamsReplaced = await interpreter.interpret(objParams, {}, options, globalValues);
         objParams.objParamsIsReplaced = true;
@@ -1282,8 +1288,10 @@ class interpreter {
       const resObject = {};
 
       for (const key of keys) {
+        console.log('interpreter.interpret-2', {key, inputObject: JSON.stringify(inputObject[key], null, 2), objParams: JSON.stringify(objParams, null, 2), options: JSON.stringify(options, null, 2), globalValues: JSON.stringify(globalValues, null, 2)});
         const _value = await interpreter.interpret(inputObject[key], objParams, options, globalValues);
         const _key = await interpreter._interpretSecure(objParams, key, params);
+        console.log('interpreter.interpret-3', {_key, _value});
         resObject[_key] = _value;
       }
       return resObject;
